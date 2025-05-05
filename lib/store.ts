@@ -12,6 +12,20 @@ interface WalletState {
   disconnectWallet: () => void
 }
 
+// Function to check MiniKit installation with retries
+const checkMiniKitWithRetry = async (maxRetries = 3, interval = 1000): Promise<boolean> => {
+  // First immediate check
+  if (MiniKit.isInstalled()) return true;
+  
+  // Try a few more times with delay
+  for (let i = 0; i < maxRetries; i++) {
+    await new Promise(resolve => setTimeout(resolve, interval));
+    if (MiniKit.isInstalled()) return true;
+  }
+  
+  return false;
+}
+
 export const useWalletStore = create<WalletState>((set, get) => ({
   isConnected: false,
   walletAddress: "",
@@ -24,9 +38,11 @@ export const useWalletStore = create<WalletState>((set, get) => ({
     try {
       set({ isConnecting: true })
       
-      // Check if MiniKit is installed
-      if (!MiniKit.isInstalled()) {
-        console.error("MiniKit not installed or not running in WorldApp")
+      // Check if MiniKit is installed with retry
+      const isInstalled = await checkMiniKitWithRetry(5, 800);
+      
+      if (!isInstalled) {
+        console.warn("MiniKit not detected after retries, using fallback")
         // Fallback for development/testing
         set({
           isConnected: true,
@@ -38,6 +54,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         })
         return
       }
+      
+      console.log("MiniKit detected, proceeding with connection")
       
       // Request nonce from server
       const nonceRes = await fetch("/api/nonce")

@@ -5,36 +5,58 @@ import { MiniKit } from '@worldcoin/minikit-js'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertCircle } from 'lucide-react'
 
+// Create a type definition for the global window object to avoid TypeScript errors
+declare global {
+  interface Window {
+    __MINIKIT_INITIALIZED__?: boolean;
+  }
+}
+
 export function MinikitStatus() {
   // Don't initialize any state before detection
   const [showWarning, setShowWarning] = useState<boolean | null>(null)
 
   useEffect(() => {
-    // Initial check
-    const installed = MiniKit.isInstalled()
-    
-    // If we're running in WorldApp, never show the warning
-    if (installed) {
-      setShowWarning(false)
-      return;
-    }
-    
-    // If we're not in WorldApp, wait a short delay then show warning
-    const timer = setTimeout(() => {
-      if (!MiniKit.isInstalled()) {
-        setShowWarning(true)
-        
-        // Set a timeout to eventually hide the warning
-        const hideTimer = setTimeout(() => {
-          setShowWarning(false)
-        }, 10000)
-        
-        return () => clearTimeout(hideTimer)
+    // Give MiniKit more time to initialize
+    const initialDelay = setTimeout(() => {
+      // First check - might already be available
+      if (MiniKit.isInstalled()) {
+        setShowWarning(false)
+        return;
       }
-    }, 1000) // Longer delay to ensure detection works
+      
+      // Set up polling to check repeatedly for MiniKit
+      const checkInterval = setInterval(() => {
+        if (MiniKit.isInstalled()) {
+          setShowWarning(false)
+          clearInterval(checkInterval)
+        }
+      }, 1000)
+      
+      // After a longer timeout, if MiniKit isn't detected, show the warning
+      const warningDelay = setTimeout(() => {
+        if (!MiniKit.isInstalled()) {
+          console.warn('MiniKit not detected after extended timeout')
+          setShowWarning(true)
+          
+          // Keep checking even after showing the warning
+          // This handles the case where it becomes available later
+          const warningCheckInterval = setInterval(() => {
+            if (MiniKit.isInstalled()) {
+              setShowWarning(false)
+              clearInterval(warningCheckInterval)
+            }
+          }, 2000)
+        }
+      }, 3000) // Longer delay for showing warning
+      
+      return () => {
+        clearTimeout(warningDelay)
+        clearInterval(checkInterval)
+      }
+    }, 1500) // Initial delay to allow provider to initialize
     
-    // Clean up
-    return () => clearTimeout(timer)
+    return () => clearTimeout(initialDelay)
   }, [])
   
   // Don't render anything until we've made a determination
@@ -49,8 +71,13 @@ export function MinikitStatus() {
         <AlertTitle className="text-orange-500">WorldApp Not Detected</AlertTitle>
         <AlertDescription className="text-orange-300">
           This app is designed to run in WorldApp. Some features may not work properly.
+          {process.env.NODE_ENV === 'development' && (
+            <div className="mt-2 text-xs">
+              Running in development mode - wallet fallbacks will be used.
+            </div>
+          )}
         </AlertDescription>
       </Alert>
     </div>
   )
-} 
+}
