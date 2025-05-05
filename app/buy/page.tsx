@@ -24,7 +24,7 @@ import { toast } from "@/components/ui/use-toast"
 import { useMiniKit } from "@/hooks/use-minikit"
 
 export default function BuyPage() {
-  const { minikit, isReady: isMiniKitReady } = useMiniKit()
+  const { isReady: isMiniKitReady, executeCommand } = useMiniKit()
   const { isConnected, isConnecting, walletAddress, username, connectWallet, disconnectWallet } = useWalletStore()
   const { user, loading, signIn, refreshUser } = useSupabase()
   const [ticketCount, setTicketCount] = useState(1)
@@ -105,78 +105,94 @@ export default function BuyPage() {
       }
       
       // Check if MiniKit is available
-      if (isMiniKitReady && minikit) {
+      if (isMiniKitReady) {
         console.log('Using MiniKit for wallet connection');
         
-        // Request nonce from server
-        const nonceRes = await fetch("/api/nonce");
-        const { nonce } = await nonceRes.json();
-        
-        // Use walletAuth command to authenticate
-        const { commandPayload, finalPayload } = await minikit.commandsAsync.walletAuth({
-          nonce,
-          requestId: "0",
-          expirationTime: new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000),
-          notBefore: new Date(new Date().getTime() - 24 * 60 * 60 * 1000),
-          statement: "Sign in to ORB Lotto with your WorldApp wallet",
-        });
-        
-        // Handle error from walletAuth
-        if (finalPayload.status === "error") {
-          console.error("Wallet auth error:", finalPayload);
-          toast({
-            title: "Authentication Failed",
-            description: "Could not authenticate with WorldApp wallet",
-            variant: "destructive"
-          });
-          return;
-        }
-        
-        // Verify the signature on backend
-        const verifyRes = await fetch("/api/complete-siwe", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            payload: finalPayload,
-            nonce,
-          }),
-        });
-        
-        const verifyData = await verifyRes.json();
-        
-        if (verifyData.status === "error" || !verifyData.isValid) {
-          console.error("Signature verification failed:", verifyData);
-          toast({
-            title: "Verification Failed",
-            description: "Could not verify your wallet signature",
-            variant: "destructive"
-          });
-          return;
-        }
-        
-        // Get user's username from MiniKit if available
-        let username = "worldapp_user"; // Default
         try {
-          if (minikit.user?.username) {
-            username = minikit.user.username;
-          } else if (finalPayload.address) {
-            // Try to get username by address
-            const userData = await minikit.getUserByAddress(finalPayload.address);
-            if (userData?.username) {
-              username = userData.username;
-            }
+          // Request nonce from server
+          const nonceRes = await fetch("/api/nonce");
+          const { nonce } = await nonceRes.json();
+          
+          // Use executeCommand for safer MiniKit usage
+          const walletAuthResult = await executeCommand(async (minikit) => {
+            return await minikit.commandsAsync.walletAuth({
+              nonce,
+              requestId: "0",
+              expirationTime: new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000),
+              notBefore: new Date(new Date().getTime() - 24 * 60 * 60 * 1000),
+              statement: "Sign in to ORB Lotto with your WorldApp wallet",
+            });
+          });
+          
+          const { finalPayload } = walletAuthResult;
+          
+          // Handle error from walletAuth
+          if (finalPayload.status === "error") {
+            console.error("Wallet auth error:", finalPayload);
+            toast({
+              title: "Authentication Failed",
+              description: "Could not authenticate with WorldApp wallet",
+              variant: "destructive"
+            });
+            return;
           }
+          
+          // Verify the signature on backend
+          const verifyRes = await fetch("/api/complete-siwe", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              payload: finalPayload,
+              nonce,
+            }),
+          });
+          
+          const verifyData = await verifyRes.json();
+          
+          if (verifyData.status === "error" || !verifyData.isValid) {
+            console.error("Signature verification failed:", verifyData);
+            toast({
+              title: "Verification Failed",
+              description: "Could not verify your wallet signature",
+              variant: "destructive"
+            });
+            return;
+          }
+          
+          // Get user's username from MiniKit if available
+          let username = "worldapp_user"; // Default
+          try {
+            // Use executeCommand for safer MiniKit access
+            const userInfo = await executeCommand(async (minikit) => {
+              if (minikit.user?.username) {
+                return { username: minikit.user.username };
+              } else if (finalPayload.address) {
+                const userData = await minikit.getUserByAddress(finalPayload.address);
+                return userData || { username: null };
+              }
+              return { username: null };
+            });
+            
+            if (userInfo?.username) {
+              username = userInfo.username;
+            }
+          } catch (error) {
+            console.warn("Could not fetch username:", error);
+          }
+          
+          // Update wallet store with connected wallet info
+          await connectWallet();
+          
+          // Use the store to sign in to Supabase
+          await signIn(finalPayload.address, username);
+          
         } catch (error) {
-          console.warn("Could not fetch username:", error);
+          console.error("Error during MiniKit wallet auth:", error);
+          // Fall back to regular connect
+          await connectWallet();
         }
-        
-        // Update wallet store with connected wallet info
-        await connectWallet();
-        
-        // Use the store to sign in to Supabase
-        await signIn(finalPayload.address, username);
       } else {
         // Fallback to regular connect when not in WorldApp
         console.log('MiniKit not ready, using fallback connection');
@@ -248,42 +264,42 @@ export default function BuyPage() {
       const paymentData = await initRes.json()
       console.log("Payment initiated:", paymentData)
       
-      // 2. Send payment command to World App - EXACTLY as per documentation
+      // 2. Send payment command to World App - using executeCommand for better handling
       try {
-        // Configure payment params exactly as required by WorldApp documentation
-        const { finalPayload, commandPayload } = await minikit.commandsAsync.pay({
-          // Using the exact format from Worldcoin documentation
-          reference: paymentData.paymentId,
-          to: paymentData.recipientAddress,
-          tokens: [{
-            symbol: currency,
-            token_amount: paymentData.amount.toString()
-          }],
-          description: `Purchase of ${ticketCount} ${getLottoTitle(selectedAmount)} tickets`
-        })
+        // Use executeCommand for safer MiniKit access
+        const paymentResult = await executeCommand(async (minikit) => {
+          return await minikit.commandsAsync.pay({
+            reference: paymentData.paymentId,
+            to: paymentData.recipientAddress,
+            tokens: [{
+              symbol: currency,
+              token_amount: paymentData.amount.toString()
+            }],
+            description: `Purchase of ${ticketCount} ${getLottoTitle(selectedAmount)} tickets`
+          });
+        });
         
-        console.log("Payment result:", { finalPayload, commandPayload })
+        const { finalPayload } = paymentResult;
         
-        // 3. Error handling specifically for payment failures
+        console.log("Payment result:", finalPayload);
+        
+        // 3. Error handling for payment failures
         if (!finalPayload || finalPayload.status === "error") {
-          // We need to handle different error scenarios from the payment system
-          // Safely access error properties with type assertion since API might return fields
-          // that aren't in the type definitions
           const errorPayload = finalPayload as any;
-          const errorMessage = errorPayload?.error_message || errorPayload?.code || "Unknown payment error"
-          console.error("Payment failed:", errorMessage)
+          const errorMessage = errorPayload?.error_message || errorPayload?.code || "Unknown payment error";
+          console.error("Payment failed:", errorMessage);
           
           if (errorMessage.includes("insufficient") || errorMessage.includes("balance")) {
-            throw new Error("Insufficient funds to complete this transaction. Please add funds to your wallet.")
+            throw new Error("Insufficient funds to complete this transaction. Please add funds to your wallet.");
           } else if (errorMessage.includes("rejected") || errorMessage.includes("denied")) {
-            throw new Error("Payment was rejected by the user.")
+            throw new Error("Payment was rejected by the user.");
           } else {
-            throw new Error(`Payment failed: ${errorMessage}`)
+            throw new Error(`Payment failed: ${errorMessage}`);
           }
         }
         
         // Store transaction ID for reference
-        setTransactionId(finalPayload.transaction_id)
+        setTransactionId(finalPayload.transaction_id);
         
         // 4. Verify payment with backend
         const verifyRes = await fetch("/api/verify-payment", {
@@ -295,55 +311,54 @@ export default function BuyPage() {
             paymentId: paymentData.paymentId,
             transactionId: finalPayload.transaction_id
           })
-        })
+        });
         
         if (!verifyRes.ok) {
-          const errorData = await verifyRes.json()
-          throw new Error(errorData.error || "Failed to verify payment")
+          const errorData = await verifyRes.json();
+          throw new Error(errorData.error || "Failed to verify payment");
         }
         
-        const verifyData = await verifyRes.json()
+        const verifyData = await verifyRes.json();
         
         // 5. Generate tickets after successful payment
-        // Note: In production, these would come from the verify endpoint
         const tickets = verifyData.tickets?.map((t: any) => t.number) || 
-          Array.from({ length: ticketCount }, () => generateTicketNumber())
+          Array.from({ length: ticketCount }, () => generateTicketNumber());
           
-        setGeneratedTickets(tickets)
+        setGeneratedTickets(tickets);
         
         // Show success toast
         toast({
           title: "Purchase successful!",
           description: `You purchased ${ticketCount} ${getLottoTitle(selectedAmount)} tickets`,
           variant: "default"
-        })
+        });
       } catch (error: any) {
-        console.error("Payment command error:", error)
+        console.error("Payment command error:", error);
         
         // Specific error handling for payment issues
         if (error.message?.includes("user_rejected") || error.message?.includes("rejected")) {
-          throw new Error("Payment was rejected by the user")
+          throw new Error("Payment was rejected by the user");
         } else if (error.message?.includes("insufficient") || error.message?.includes("balance")) {
-          throw new Error("Insufficient funds to complete this transaction")
+          throw new Error("Insufficient funds to complete this transaction");
         } else {
-          throw error
+          throw error;
         }
       }
       
     } catch (error: any) {
-      console.error("Error purchasing tickets:", error)
+      console.error("Error purchasing tickets:", error);
       toast({
         title: "Purchase failed",
         description: error.message || "Failed to purchase tickets",
         variant: "destructive"
-      })
+      });
       
       // Fallback for development only
       if (process.env.NODE_ENV !== "production") {
-        simulateTicketGeneration()
+        simulateTicketGeneration();
       }
     } finally {
-      setIsProcessing(false)
+      setIsProcessing(false);
     }
   }
   

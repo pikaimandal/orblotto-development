@@ -14,7 +14,7 @@ import { toast } from "@/components/ui/use-toast"
 import { useMiniKit } from "@/hooks/use-minikit"
 
 export default function ProfilePage() {
-  const { minikit, isReady: isMiniKitReady } = useMiniKit()
+  const { isReady: isMiniKitReady, executeCommand } = useMiniKit()
   const { isConnected, isConnecting, walletAddress, username, connectWallet, disconnectWallet } = useWalletStore()
   const { user, loading, signIn, signOut, refreshUser } = useSupabase()
   
@@ -79,78 +79,94 @@ export default function ProfilePage() {
       }
       
       // Check if MiniKit is available
-      if (isMiniKitReady && minikit) {
+      if (isMiniKitReady) {
         console.log('Using MiniKit for wallet connection');
         
-        // Request nonce from server
-        const nonceRes = await fetch("/api/nonce");
-        const { nonce } = await nonceRes.json();
-        
-        // Use walletAuth command to authenticate
-        const { commandPayload, finalPayload } = await minikit.commandsAsync.walletAuth({
-          nonce,
-          requestId: "0",
-          expirationTime: new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000),
-          notBefore: new Date(new Date().getTime() - 24 * 60 * 60 * 1000),
-          statement: "Sign in to ORB Lotto with your WorldApp wallet",
-        });
-        
-        // Handle error from walletAuth
-        if (finalPayload.status === "error") {
-          console.error("Wallet auth error:", finalPayload);
-          toast({
-            title: "Authentication Failed",
-            description: "Could not authenticate with WorldApp wallet",
-            variant: "destructive"
-          });
-          return;
-        }
-        
-        // Verify the signature on backend
-        const verifyRes = await fetch("/api/complete-siwe", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            payload: finalPayload,
-            nonce,
-          }),
-        });
-        
-        const verifyData = await verifyRes.json();
-        
-        if (verifyData.status === "error" || !verifyData.isValid) {
-          console.error("Signature verification failed:", verifyData);
-          toast({
-            title: "Verification Failed",
-            description: "Could not verify your wallet signature",
-            variant: "destructive"
-          });
-          return;
-        }
-        
-        // Get user's username from MiniKit if available
-        let username = "worldapp_user"; // Default
         try {
-          if (minikit.user?.username) {
-            username = minikit.user.username;
-          } else if (finalPayload.address) {
-            // Try to get username by address
-            const userData = await minikit.getUserByAddress(finalPayload.address);
-            if (userData?.username) {
-              username = userData.username;
-            }
+          // Request nonce from server
+          const nonceRes = await fetch("/api/nonce");
+          const { nonce } = await nonceRes.json();
+          
+          // Use the executeCommand function for better error handling
+          const walletAuthResult = await executeCommand(async (minikit) => {
+            return await minikit.commandsAsync.walletAuth({
+              nonce,
+              requestId: "0",
+              expirationTime: new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000),
+              notBefore: new Date(new Date().getTime() - 24 * 60 * 60 * 1000),
+              statement: "Sign in to ORB Lotto with your WorldApp wallet",
+            });
+          });
+          
+          const { finalPayload } = walletAuthResult;
+          
+          // Handle error from walletAuth
+          if (finalPayload.status === "error") {
+            console.error("Wallet auth error:", finalPayload);
+            toast({
+              title: "Authentication Failed",
+              description: "Could not authenticate with WorldApp wallet",
+              variant: "destructive"
+            });
+            return;
           }
+          
+          // Verify the signature on backend
+          const verifyRes = await fetch("/api/complete-siwe", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              payload: finalPayload,
+              nonce,
+            }),
+          });
+          
+          const verifyData = await verifyRes.json();
+          
+          if (verifyData.status === "error" || !verifyData.isValid) {
+            console.error("Signature verification failed:", verifyData);
+            toast({
+              title: "Verification Failed",
+              description: "Could not verify your wallet signature",
+              variant: "destructive"
+            });
+            return;
+          }
+          
+          // Get user's username from MiniKit if available
+          let username = "worldapp_user"; // Default
+          try {
+            // Use executeCommand to safely access MiniKit.user
+            const userInfo = await executeCommand(async (minikit) => {
+              if (minikit.user?.username) {
+                return { username: minikit.user.username };
+              } else if (finalPayload.address) {
+                const userData = await minikit.getUserByAddress(finalPayload.address);
+                return userData || { username: null };
+              }
+              return { username: null };
+            });
+            
+            if (userInfo?.username) {
+              username = userInfo.username;
+            }
+          } catch (error) {
+            console.warn("Could not fetch username:", error);
+          }
+          
+          // Update wallet store with connected wallet info
+          await connectWallet();
+          
+          // Use the store to sign in to Supabase
+          await signIn(finalPayload.address, username);
+          
         } catch (error) {
-          console.warn("Could not fetch username:", error);
+          console.error("Error during MiniKit wallet auth:", error);
+          // Fall back to regular connect if MiniKit encounters an error
+          await connectWallet();
         }
-        
-        // Update wallet store with connected wallet info
-        await connectWallet();
-        
-        // Use the store to sign in to Supabase
-        await signIn(finalPayload.address, username);
       } else {
         // Fallback to regular connect when not in WorldApp
         console.log('MiniKit not ready, using fallback connection');

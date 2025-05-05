@@ -6,32 +6,34 @@ import { AlertCircle } from 'lucide-react'
 import { useMiniKit } from '@/hooks/use-minikit'
 
 export function MinikitStatus() {
-  const { isWorldApp } = useMiniKit()
-  const [showWarning, setShowWarning] = useState(false)
+  const { isWorldApp, isReady, isDetecting } = useMiniKit()
+  const [showWarning, setShowWarning] = useState<boolean>(false)
   
+  // Logic to determine if we should show the warning
   useEffect(() => {
-    // Give MiniKit time to initialize before showing warning
-    const timer = setTimeout(() => {
-      setShowWarning(!isWorldApp)
-    }, 3000)
-    
-    // Hide warning after showing it for a while if we're in development
-    if (!isWorldApp && process.env.NODE_ENV === 'development') {
-      const hideTimer = setTimeout(() => {
-        setShowWarning(false)
-      }, 10000)
+    // If we know we're in WorldApp, never show the warning
+    if (isWorldApp) {
+      setShowWarning(false)
+      return
+    }
+
+    // Only show warning if not in WorldApp and we've finished detection
+    if (!isWorldApp && !isDetecting) {
+      setShowWarning(true)
       
-      return () => {
-        clearTimeout(timer)
-        clearTimeout(hideTimer)
+      // In development, hide warning after some time
+      if (process.env.NODE_ENV === 'development') {
+        const timer = setTimeout(() => {
+          setShowWarning(false)
+        }, 10000)
+        
+        return () => clearTimeout(timer)
       }
     }
-    
-    return () => clearTimeout(timer)
-  }, [isWorldApp])
+  }, [isWorldApp, isDetecting])
   
-  // Don't render anything if we're in WorldApp or shouldn't show warning
-  if (isWorldApp || !showWarning) {
+  // Don't render anything when detection is still ongoing or we're in WorldApp
+  if (isDetecting || isWorldApp || !showWarning) {
     return null
   }
 
