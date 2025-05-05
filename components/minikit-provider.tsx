@@ -2,31 +2,33 @@
 
 import { ReactNode, useEffect } from 'react'
 import { MiniKit } from '@worldcoin/minikit-js'
+import { MiniKitProvider } from '@worldcoin/minikit-js/minikit-provider'
 
-export default function MiniKitProvider({ children }: { children: ReactNode }) {
+// This component ensures MiniKit is properly initialized
+export default function MinikitProviderComponent({ children }: { children: ReactNode }) {
+  const appId = process.env.NEXT_PUBLIC_WORLDCOIN_APP_ID
+
+  // Use an effect to ensure consistent initialization even if the early init script didn't run
   useEffect(() => {
-    // Initialization code for MiniKit as per official docs 
-    // https://docs.world.org/mini-apps/quick-start/installing
-    
-    const appId = process.env.NEXT_PUBLIC_WORLDCOIN_APP_ID
-    
-    // Manual initialization at the component level
     try {
-      // Check if we're already initialized to prevent duplicate initialization
-      const isAlreadyInitialized = MiniKit._isInitialized
+      // Check if MiniKit is already installed
+      const isAlreadyInstalled = MiniKit.isInstalled()
+      console.log('MiniKit initial isInstalled check:', isAlreadyInstalled)
       
-      if (!isAlreadyInitialized) {
-        console.log('Initializing MiniKit with app ID:', appId)
-        MiniKit.install(appId)
-      }
+      // Even if installed, ensure proper initialization
+      MiniKit.install(appId)
+      console.log('MiniKit initialized with appId:', appId)
       
-      // Log installation status for debugging
-      console.log('MiniKit installed status:', MiniKit.isInstalled())
-      console.log('MiniKit initialized status:', MiniKit._isInitialized)
+      // Check again after explicit initialization
+      console.log('MiniKit post-init isInstalled check:', MiniKit.isInstalled())
     } catch (error) {
-      console.error('Error initializing MiniKit:', error)
+      console.error('Error during MiniKit initialization:', error)
     }
-  }, [])
+  }, [appId])
 
-  return <>{children}</>
+  return (
+    <MiniKitProvider appId={appId}>
+      {children}
+    </MiniKitProvider>
+  )
 }

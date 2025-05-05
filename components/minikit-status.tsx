@@ -4,25 +4,33 @@ import { useEffect, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertCircle } from 'lucide-react'
 import { useMiniKit } from '@/hooks/use-minikit'
+import { MiniKit } from '@worldcoin/minikit-js'
 
 export function MinikitStatus() {
-  const { isWorldApp, isReady, isDetecting } = useMiniKit()
-  const [showWarning, setShowWarning] = useState<boolean>(false)
+  const { isWorldApp, isDetecting } = useMiniKit()
+  const [showWarning, setShowWarning] = useState(false)
   
-  // Logic to determine if we should show the warning
+  // Simpler logic that only shows the warning after detection is complete
+  // and only if we're not in WorldApp
   useEffect(() => {
-    // If we know we're in WorldApp, never show the warning
-    if (isWorldApp) {
-      setShowWarning(false)
-      return
+    // First, check the direct API to ensure we're getting the latest status
+    try {
+      // If MiniKit.isInstalled() returns true, we're definitely in WorldApp
+      if (MiniKit.isInstalled()) {
+        setShowWarning(false)
+        return
+      }
+    } catch (error) {
+      // Error in checking means we're likely not in WorldApp
+      console.warn('Error checking MiniKit.isInstalled():', error)
     }
 
-    // Only show warning if not in WorldApp and we've finished detection
-    if (!isWorldApp && !isDetecting) {
-      setShowWarning(true)
+    // Only show warning if detection is complete and not in WorldApp
+    if (!isDetecting) {
+      setShowWarning(!isWorldApp)
       
-      // In development, hide warning after some time
-      if (process.env.NODE_ENV === 'development') {
+      // In dev mode, hide warning after a while
+      if (process.env.NODE_ENV === 'development' && !isWorldApp) {
         const timer = setTimeout(() => {
           setShowWarning(false)
         }, 10000)
@@ -32,8 +40,8 @@ export function MinikitStatus() {
     }
   }, [isWorldApp, isDetecting])
   
-  // Don't render anything when detection is still ongoing or we're in WorldApp
-  if (isDetecting || isWorldApp || !showWarning) {
+  // Don't render anything if we don't need to show the warning
+  if (!showWarning) {
     return null
   }
 
