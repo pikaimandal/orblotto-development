@@ -211,7 +211,7 @@ export default function BuyPage() {
       setIsProcessing(true)
       
       // Check if MiniKit is available
-      if (!isMiniKitReady || !minikit) {
+      if (!isMiniKitReady) {
         toast({
           title: "WorldApp not detected",
           description: "This feature requires WorldApp to work properly",
